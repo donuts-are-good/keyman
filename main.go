@@ -291,6 +291,11 @@ func mapKey(key, host string) {
 		log.Fatal(err)
 	}
 
+	if len(config[host]) >= 1 {
+		fmt.Printf("The host %s already has a key mapped. Please unmap the current key before mapping a new one.\n", host)
+		return
+	}
+
 	config[host] = append(config[host], key)
 
 	err = writeConfig(configPath, config)
@@ -300,6 +305,27 @@ func mapKey(key, host string) {
 
 	fmt.Printf("Mapped key %s to host %s\n", key, host)
 }
+
+// func mapKey(key, host string) {
+// 	configPath, err := getConfigPath()
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	config, err := parseConfig()
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	config[host] = append(config[host], key)
+
+// 	err = writeConfig(configPath, config)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	fmt.Printf("Mapped key %s to host %s\n", key, host)
+// }
 
 func unmapKey(key, host string) {
 	configPath, err := getConfigPath()
@@ -341,9 +367,6 @@ func writeConfig(path string, config map[string][]string) error {
 	for _, host := range hosts {
 		lines = append(lines, fmt.Sprintf("Host %s", host))
 		keyPaths := config[host]
-
-		sort.Strings(keyPaths)
-
 		for _, keyPath := range keyPaths {
 			lines = append(lines, fmt.Sprintf("  IdentityFile %s", keyPath))
 		}
@@ -353,6 +376,53 @@ func writeConfig(path string, config map[string][]string) error {
 	content := strings.Join(lines, "\n")
 	return os.WriteFile(path, []byte(content), 0644)
 }
+
+// func writeConfig(path string, config map[string]string) error {
+// 	var lines []string
+
+// 	hosts := make([]string, 0, len(config))
+// 	for host := range config {
+// 		hosts = append(hosts, host)
+// 	}
+
+// 	sort.Strings(hosts)
+
+// 	for _, host := range hosts {
+// 		lines = append(lines, fmt.Sprintf("Host %s", host))
+// 		keyPath := config[host]
+// 		lines = append(lines, fmt.Sprintf("  IdentityFile %s", keyPath))
+// 		lines = append(lines, "")
+// 	}
+
+// 	content := strings.Join(lines, "\n")
+// 	return os.WriteFile(path, []byte(content), 0644)
+// }
+
+// func writeConfig(path string, config map[string][]string) error {
+// 	var lines []string
+
+// 	hosts := make([]string, 0, len(config))
+// 	for host := range config {
+// 		hosts = append(hosts, host)
+// 	}
+
+// 	sort.Strings(hosts)
+
+// 	for _, host := range hosts {
+// 		lines = append(lines, fmt.Sprintf("Host %s", host))
+// 		keyPaths := config[host]
+
+// 		sort.Strings(keyPaths)
+
+// 		for _, keyPath := range keyPaths {
+// 			lines = append(lines, fmt.Sprintf("  IdentityFile %s", keyPath))
+// 		}
+// 		lines = append(lines, "")
+// 	}
+
+// 	content := strings.Join(lines, "\n")
+// 	return os.WriteFile(path, []byte(content), 0644)
+// }
 
 func generateKey() {
 	reader := bufio.NewReader(os.Stdin)
@@ -414,20 +484,15 @@ func runCommand(command string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	return cmd.Run()
 }
-func deleteKey(key string) {
-	var fullKeyPath string
-	if filepath.IsAbs(key) {
-		fullKeyPath = key
-	} else {
-		sshPath, err := getSSHPath()
-		if err != nil {
-			log.Fatal(err)
-		}
 
-		fullKeyPath = filepath.Join(sshPath, key)
+// deleteKey deletes a key and removes it from the SSH config.
+func deleteKey(key string) {
+	fullKeyPath, err := getFullKeyPath(key)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	err := os.Remove(fullKeyPath)
+	err = os.Remove(fullKeyPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -443,30 +508,106 @@ func deleteKey(key string) {
 		log.Fatal(err)
 	}
 
-	content, err := os.ReadFile(configPath)
+	config, err := parseConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	configLines := strings.Split(string(content), "\n")
+	// Iterate over each host and its keys.
+	for host, keyPaths := range config {
+		// Iterate over the keys of this host.
+		for i, keyPath := range keyPaths {
+			if keyPath == fullKeyPath {
+				// Remove the key from the host's key paths.
+				keyPaths = append(keyPaths[:i], keyPaths[i+1:]...)
 
-	newConfigLines := make([]string, 0, len(configLines))
-	for _, line := range configLines {
-		if strings.Contains(line, fullKeyPath) {
-			newConfigLines = append(newConfigLines, "#"+line)
-		} else {
-			newConfigLines = append(newConfigLines, line)
+				if len(keyPaths) == 0 {
+					// If the host has no more keys, delete the host from the config.
+					delete(config, host)
+				} else {
+					// Otherwise, update the host's keys.
+					config[host] = keyPaths
+				}
+
+				break
+			}
 		}
 	}
 
-	newContent := strings.Join(newConfigLines, "\n")
-	err = os.WriteFile(configPath, []byte(newContent), 0644)
+	err = writeConfig(configPath, config)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	fmt.Printf("Deleted key %s\n", key)
 }
+
+func getFullKeyPath(key string) (string, error) {
+	sshPath, err := getSSHPath()
+	if err != nil {
+		return "", err
+	}
+
+	if filepath.IsAbs(key) {
+		return key, nil
+	} else {
+		return filepath.Join(sshPath, key), nil
+	}
+}
+
+// func deleteKey(key string) {
+// 	var fullKeyPath string
+// 	if filepath.IsAbs(key) {
+// 		fullKeyPath = key
+// 	} else {
+// 		sshPath, err := getSSHPath()
+// 		if err != nil {
+// 			log.Fatal(err)
+// 		}
+
+// 		fullKeyPath = filepath.Join(sshPath, key)
+// 	}
+
+// 	err := os.Remove(fullKeyPath)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	pubFilePath := fullKeyPath + ".pub"
+// 	err = os.Remove(pubFilePath)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	configPath, err := getConfigPath()
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	content, err := os.ReadFile(configPath)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	configLines := strings.Split(string(content), "\n")
+
+// 	newConfigLines := make([]string, 0, len(configLines))
+// 	for _, line := range configLines {
+// 		if strings.Contains(line, fullKeyPath) {
+// 			newConfigLines = append(newConfigLines, "#"+line)
+// 		} else {
+// 			newConfigLines = append(newConfigLines, line)
+// 		}
+// 	}
+
+// 	newContent := strings.Join(newConfigLines, "\n")
+// 	err = os.WriteFile(configPath, []byte(newContent), 0644)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	fmt.Printf("Deleted key %s\n", key)
+// }
 
 func audit() {
 	keys, err := getKeys()
